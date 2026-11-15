@@ -1,13 +1,13 @@
-# Event RSVP
+# Gatherly
+
+![CI](https://github.com/quantamsage/gatherly/actions/workflows/ci.yml/badge.svg)
 
 A host creates an event and shares one public link. Guests reply yes, maybe or no
 without an account. The host gets a private dashboard with the guest list and live counts.
+When an event fills up, new guests join a waitlist and move up automatically as spots free up.
 
 The point of the project is **public and private access side by side**: anyone with the
 link can RSVP, but only the host who owns the event can see who's coming.
-
-- Live app: `https://<your-app>.vercel.app` (add after deploy)
-- API: `https://<your-api>.onrender.com/health`
 
 ## Features
 
@@ -19,14 +19,18 @@ link can RSVP, but only the host who owns the event can see who's coming.
 - One reply per email per event (case-insensitive)
 - Host dashboard: people coming vs capacity, yes/maybe/no counts, guest list
 - Safe under load: two guests can't both take the last spot
+- **Waitlist:** optional per event. Once it's full, guests who say yes join a numbered waitlist. When someone cancels, brings fewer people, is removed by the host, or the host raises the capacity, guests are promoted oldest first. A party too big for the free space keeps its place without blocking smaller groups behind it
+- **Private guest link:** after replying, each guest gets a secret link to check their waitlist place, bring fewer people or cancel. Only a hash of the token is stored
+- **Guest list CSV export** for the host (name, email, reply, status, party size, waitlist position, note, reply time), with spreadsheet formula injection neutralised
+- **Add to calendar:** a `.ics` file guests can open in Google Calendar, Outlook or Apple Calendar
 
 ## Screenshots
 
-| Guest RSVP (mobile) | Reply saved |
+| Guest RSVP when full (mobile) | Joined the waitlist |
 |---|---|
-| ![RSVP form](docs/screenshots/rsvp-form-mobile.png) | ![Confirmed](docs/screenshots/rsvp-confirmed-mobile.png) |
+| ![RSVP form](docs/screenshots/rsvp-form-mobile.png) | ![Waitlisted](docs/screenshots/rsvp-waitlisted-mobile.png) |
 
-| Host dashboard | Host's events |
+| Host dashboard (guest promoted from the waitlist) | Host's events |
 |---|---|
 | ![Event dashboard](docs/screenshots/host-event-dashboard.png) | ![Events list](docs/screenshots/host-events-list.png) |
 
@@ -34,8 +38,7 @@ link can RSVP, but only the host who owns the event can see who's coming.
 
 - **Backend:** Python 3.12, FastAPI, Pydantic, psycopg 3 (connection pool), Argon2 (argon2-cffi), PyJWT
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript, plain CSS
-- **Database:** PostgreSQL on Supabase (shared project, tables prefixed `rsvp_`)
-- **Hosting:** Render (backend, Frankfurt), Vercel (frontend)
+- **Database:** PostgreSQL 16 (tables prefixed `rsvp_`, so it can share a database)
 - **Testing:** pytest against a real Postgres, GitHub Actions CI
 
 ## Architecture
@@ -44,8 +47,8 @@ link can RSVP, but only the host who owns the event can see who's coming.
 flowchart LR
     G[Guest browser] -->|HTTPS JSON<br/>no token| FE
     H[Host browser] -->|HTTPS JSON<br/>Bearer JWT| FE
-    FE[Next.js on Vercel<br/>display + interaction only] -->|fetch over HTTPS| API
-    API[FastAPI on Render<br/>validation, auth, ownership,<br/>RSVP rules] -->|SQL as rsvp_app<br/>Session pooler| DB[(Supabase Postgres<br/>rsvp_hosts<br/>rsvp_events<br/>rsvp_responses)]
+    FE[Next.js frontend<br/>display + interaction only] -->|fetch| API
+    API[FastAPI backend<br/>validation, auth, ownership,<br/>RSVP + waitlist rules] -->|SQL as rsvp_app| DB[(PostgreSQL<br/>rsvp_hosts<br/>rsvp_events<br/>rsvp_responses)]
 ```
 
 The browser never talks to the database. The frontend calls the API; the API is the
@@ -72,8 +75,8 @@ only thing that holds database credentials.
 
 ### Token storage trade-off
 
-The JWT is kept in `localStorage`. That's simple and works when the frontend (Vercel) and
-API (Render) are on different domains. The downside: any script running on the page
+The JWT is kept in `localStorage`. That's simple and works when the frontend and API are
+on different origins. The downside: any script running on the page
 could read it, so an XSS bug would leak the token. Mitigations here: 30-minute expiry,
 a strict Content-Security-Policy, and React escaping all rendered text. The safer
 alternative is an `httpOnly`, `Secure`, `SameSite` cookie, which scripts can't read, but
@@ -88,10 +91,24 @@ the same spot waits for the lock and then sees the updated count.
 `test_last_spot_goes_to_exactly_one_guest` fires 10 parallel RSVPs at a 1-spot event and
 expects exactly one success.
 
+### Waitlist
+
+With the waitlist on, a "yes" that doesn't fit is saved with status `waitlisted` instead of
+being refused. Anything that frees spots (a guest cancelling or shrinking their party, the
+host removing a guest, or raising the capacity) runs `promotion.py` inside the same locked
+transaction. It walks the waitlist oldest first and promotes every party that fits in the
+space left. A party too big for the remaining space keeps its place but doesn't block
+smaller parties behind it, so freed spots are never left empty. The ordering
+rule itself is a pure function (`to_promote` in `rsvp_logic.py`) with its own unit tests.
+
+Guests manage their reply with a random token from the confirmation screen. The database
+stores only its SHA-256 hash, so a database leak doesn't expose working links. Guests can
+lower their party size but not raise it, since that could jump the waitlist.
+
 ## Project structure
 
 ```
-event-rsvp/
+gatherly/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py          # app setup: CORS, security headers, routers
@@ -102,13 +119,16 @@ event-rsvp/
 │   │   ├── deps.py          # "who is logged in" dependency
 │   │   ├── schemas.py       # Pydantic request/response models
 │   │   ├── rsvp_logic.py    # business rules (pure functions)
+│   │   ├── promotion.py     # moves guests up from the waitlist
+│   │   ├── exports.py       # guest list CSV
+│   │   ├── calendar.py      # .ics calendar file
 │   │   ├── repo.py          # all SQL
 │   │   └── routers/         # auth.py, events.py (private), public.py (guests)
-│   ├── tests/               # logic, validation, contract, auth, events, public, privileges
+│   ├── tests/               # logic, validation, contract, auth, events, public, waitlist, privileges
 │   ├── requirements.txt / requirements-dev.txt
 │   └── .env.example
 ├── frontend/
-│   ├── app/                 # pages: /, /login, /register, /dashboard, /dashboard/events/[id], /e/[slug]
+│   ├── app/                 # pages: /, /login, /register, /dashboard, /dashboard/events/[id], /e/[slug], /rsvp/[token]
 │   ├── components/          # AuthForm, EventForm, HostTopbar
 │   ├── lib/                 # api.ts (the only backend client), auth.ts, format.ts, types.ts
 │   ├── next.config.ts       # CSP and security headers
@@ -116,20 +136,20 @@ event-rsvp/
 ├── db/schema.sql            # tables, constraints, indexes, rsvp_app role, RLS
 ├── docs/openapi.yaml        # API contract
 ├── docs/screenshots/
-├── render.yaml              # Render blueprint (backend)
 └── .github/workflows/ci.yml
 ```
 
 ## Setup (Windows, PowerShell)
 
-### 1. Database (Supabase)
+### 1. Database (local PostgreSQL)
 
-1. Supabase → SQL Editor → paste and run `db/schema.sql`.
-2. In the SQL Editor, set the app role's password (use your own long random value):
-   `ALTER ROLE rsvp_app WITH PASSWORD 'your-long-random-password';`
-3. Project Settings → Database → **Session pooler** connection string. Replace the user with
-   `rsvp_app.<project-ref>` and the password with the one from step 2.
-4. Keep the Data API off. RLS is enabled by the schema.
+```powershell
+psql -U postgres -c "CREATE DATABASE rsvp_dev"
+psql -U postgres -d rsvp_dev -f db\schema.sql
+psql -U postgres -d rsvp_dev -c "ALTER ROLE rsvp_app WITH PASSWORD 'choose-a-password'"
+```
+
+Then set `DATABASE_URL=postgresql://rsvp_app:choose-a-password@localhost:5432/rsvp_dev` in `backend/.env`.
 
 ### 2. Backend
 
@@ -165,8 +185,8 @@ cd backend
 pytest
 ```
 
-Database tests need a **throwaway** local Postgres (they wipe the tables, so never point
-them at Supabase). With Docker Desktop:
+Database tests need a **throwaway** database (they wipe the tables, so never point them at
+`rsvp_dev`). Create `rsvp_test` the same way as above, or use Docker Desktop:
 
 ```powershell
 docker run --name rsvp-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rsvp_test -p 5432:5432 -d postgres:16
@@ -178,34 +198,23 @@ pytest
 The test setup applies `db/schema.sql` and sets `rsvp_app`'s password from `TEST_DATABASE_URL`.
 CI runs the full suite against Postgres 16 on every push.
 
-## Deployment
-
-**Backend (Render):** New → Blueprint → pick this repo (uses `render.yaml`, Frankfurt).
-Set `DATABASE_URL` (Session pooler, `rsvp_app` user) and `CORS_ORIGINS` (your Vercel URL,
-no trailing slash). `JWT_SECRET` is generated by Render.
-
-**Frontend (Vercel):** import the repo, Root Directory `frontend`, env var
-`NEXT_PUBLIC_API_URL=https://<your-api>.onrender.com`. Then put the Vercel URL into
-`CORS_ORIGINS` on Render.
-
 ## Limitations
 
 - **No rate limiting** on the public RSVP endpoint, so a script could fill an event with fake replies.
 - **Emails aren't verified.** Anyone can reply with any email; one reply per email is a light guard, not identity.
-- **Guests can't change their reply.** A second reply from the same email is refused; they have to ask the host.
+- **Guests can only shrink or cancel their reply.** Switching from "no" to "yes", or adding people, goes through the host.
+- **The private guest link is shown once** on the confirmation screen. There's no email, so a guest who loses it has to ask the host.
+- **No notifications.** Promoted guests find out by opening their link; nobody is emailed.
 - **Anyone with the link can RSVP.** The slug is unguessable, but a shared link is access.
 - **Token in localStorage** (see trade-off above). No refresh tokens: hosts log in again after 30 minutes.
-- **Render free tier sleeps.** The first request after idle can take up to a minute; the UI says so.
 - Times are shown in the viewer's browser timezone.
 
 ## Future improvements
 
 - Rate limiting and a CAPTCHA on public RSVPs
-- Guest "edit my reply" link sent by email (signed, single-purpose token)
+- Email the private guest link, and notify guests when they're promoted off the waitlist
+- A deadline for promoted guests to confirm, so the spot moves on if they don't
 - httpOnly cookie auth behind a shared domain, with CSRF protection
-- CSV export of the guest list
-- Waitlist when an event is full
-- Calendar (.ics) download for guests
 
 ## License
 

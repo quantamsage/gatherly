@@ -21,7 +21,7 @@ async def lifespan(_: FastAPI):
     pool.close()
 
 
-app = FastAPI(title="Event RSVP API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Gatherly API", version="1.0.0", lifespan=lifespan)
 
 register_error_handlers(app)
 

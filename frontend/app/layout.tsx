@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Event RSVP",
+  title: "Gatherly",
   description: "Create an event, share one link, see who's coming.",
 };
 

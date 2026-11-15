@@ -1,5 +1,5 @@
 // The JWT lives in localStorage. Trade-off explained in the README:
-// simple and works across domains (Vercel -> Render), but readable by any
+// simple and works when the frontend and API are on different origins, but readable by any
 // script on the page, so we keep the token short-lived and set a strict CSP.
 
 const KEY = "rsvp_token";

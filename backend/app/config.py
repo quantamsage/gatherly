@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()  # reads backend/.env during local development; no-op on Render
+load_dotenv()  # reads backend/.env during local development
 
 
 @dataclass(frozen=True)

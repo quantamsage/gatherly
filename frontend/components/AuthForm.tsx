@@ -36,7 +36,7 @@ export default function AuthForm({ mode }: { mode: Mode }) {
   return (
     <main className="page narrow">
       <nav className="topbar">
-        <Link href="/" className="brand">Event RSVP</Link>
+        <Link href="/" className="brand">Gatherly</Link>
       </nav>
       <div className="panel">
         <h2>{isLogin ? "Log in" : "Create a host account"}</h2>

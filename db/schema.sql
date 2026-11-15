@@ -1,7 +1,7 @@
--- Event RSVP: tables, constraints, indexes and the restricted app role.
--- Run ONCE as the database owner (Supabase SQL editor runs as "postgres").
+-- Gatherly: tables, constraints, indexes and the restricted app role.
+-- Run ONCE as the database owner (e.g. "postgres").
 -- Safe to re-run: every statement checks whether the object already exists.
--- Tables are prefixed "rsvp_" because they share one Supabase project with other apps.
+-- Tables are prefixed "rsvp_" so they can share a database with other apps.
 
 -- ---------------------------------------------------------------------------
 -- Tables
@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS rsvp_events (
     -- NULL means "no limit". Counts people (party sizes), not RSVPs.
     capacity    INTEGER CHECK (capacity IS NULL OR capacity BETWEEN 1 AND 10000),
     rsvp_open   BOOLEAN NOT NULL DEFAULT TRUE,
+    -- When the event is full, extra "yes" replies join a waitlist instead of being refused.
+    waitlist_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -43,8 +45,24 @@ CREATE TABLE IF NOT EXISTS rsvp_responses (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- One RSVP per email per event. The database enforces this even if two
     -- requests arrive at the same moment.
-    CONSTRAINT rsvp_responses_one_per_email UNIQUE (event_id, email)
+    -- confirmed: counts towards capacity (for "yes"). waitlisted: a "yes" waiting for space.
+    status     TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'waitlisted')),
+    -- Set when a waitlisted guest is moved up.
+    promoted_at TIMESTAMPTZ,
+    -- SHA-256 of the guest's private "manage my RSVP" token. The token itself is
+    -- shown to the guest once and never stored, so a database leak can't reveal it.
+    manage_token_hash TEXT UNIQUE CHECK (manage_token_hash ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT rsvp_responses_one_per_email UNIQUE (event_id, email),
+    CONSTRAINT rsvp_responses_waitlist_is_yes CHECK (status = 'confirmed' OR response = 'yes')
 );
+
+-- Upgrades a database created before the waitlist existed. No-ops on a fresh one.
+ALTER TABLE rsvp_events ADD COLUMN IF NOT EXISTS waitlist_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE rsvp_responses
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'confirmed'
+        CHECK (status IN ('confirmed', 'waitlisted')),
+    ADD COLUMN IF NOT EXISTS promoted_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS manage_token_hash TEXT UNIQUE CHECK (manage_token_hash ~ '^[0-9a-f]{64}$');
 
 -- ---------------------------------------------------------------------------
 -- Indexes
@@ -56,6 +74,10 @@ CREATE TABLE IF NOT EXISTS rsvp_responses (
 -- WHERE host_id = $1 ORDER BY starts_at. Also speeds up ON DELETE CASCADE from hosts.
 CREATE INDEX IF NOT EXISTS rsvp_events_host_id_starts_at_idx
     ON rsvp_events (host_id, starts_at);
+
+-- The waitlist in order: only waitlisted rows, oldest first.
+CREATE INDEX IF NOT EXISTS rsvp_responses_waitlist_idx
+    ON rsvp_responses (event_id, created_at, id) WHERE status = 'waitlisted';
 
 -- No separate index on rsvp_responses.event_id: the UNIQUE (event_id, email)
 -- constraint creates an index whose first column is event_id, so it already

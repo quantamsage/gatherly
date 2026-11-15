@@ -2,7 +2,7 @@
 
 import { clearToken, getToken } from "./auth";
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(message: string, public code: string, public status: number) {
@@ -29,7 +29,7 @@ export async function api<T>(path: string, { method = "GET", body, auth = false 
     });
   } catch {
     throw new ApiError(
-      "Can't reach the server. If it was asleep it can take up to a minute to wake up, so try again shortly.",
+      "Can't reach the server. Check that the backend is running, then try again.",
       "NETWORK_ERROR",
       0,
     );
@@ -44,6 +44,30 @@ export async function api<T>(path: string, { method = "GET", body, auth = false 
     throw new ApiError(message, data?.error?.code ?? "UNKNOWN", res.status);
   }
   return data as T;
+}
+
+/** Download a file from an authenticated endpoint (a plain link can't send the token). */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${API_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    .catch(() => {
+      throw new ApiError("Can't reach the server. Check that the backend is running, then try again.", "NETWORK_ERROR", 0);
+    });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new ApiError(data?.error?.message ?? "Download failed. Please try again.", data?.error?.code ?? "UNKNOWN", res.status);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Public "add to calendar" file for an event. No login needed, so a normal link works. */
+export function calendarUrl(slug: string): string {
+  return `${API_URL}/public/events/${encodeURIComponent(slug)}/calendar.ics`;
 }
 
 export function errorMessage(err: unknown): string {

@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import EventForm from "@/components/EventForm";
 import HostTopbar from "@/components/HostTopbar";
-import { api, ApiError, errorMessage } from "@/lib/api";
+import { api, ApiError, downloadFile, errorMessage } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import type { EventInput, HostEvent, Rsvp } from "@/lib/types";
 import { useRequireAuth } from "@/lib/useRequireAuth";
@@ -77,6 +77,26 @@ export default function EventDetail() {
     }
   }
 
+  async function exportGuests() {
+    try {
+      await downloadFile(`/events/${id}/rsvps/export`, `guests-${event!.slug}.csv`);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
+  async function removeGuest(guest: Rsvp) {
+    const extra = guest.status === "confirmed" && event!.waitlist_enabled
+      ? " Their spot goes to the next person on the waitlist." : "";
+    if (!window.confirm(`Remove ${guest.name}'s reply?${extra}`)) return;
+    try {
+      await api(`/events/${id}/rsvps/${guest.id}`, { method: "DELETE", auth: true });
+      await load();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   async function remove() {
     if (!window.confirm("Delete this event and every RSVP? This can't be undone.")) return;
     try {
@@ -103,6 +123,9 @@ export default function EventDetail() {
         <div className="stat yes"><span className="num">{c.yes}</span>said yes</div>
         <div className="stat maybe"><span className="num">{c.maybe}</span>said maybe</div>
         <div className="stat no"><span className="num">{c.no}</span>said no</div>
+        {event.waitlist_enabled && (
+          <div className="stat maybe"><span className="num">{c.waitlisted}</span>on the waitlist</div>
+        )}
       </div>
 
       <h3>Share this link with guests</h3>
@@ -114,7 +137,7 @@ export default function EventDetail() {
       {!event.accepting_rsvps && (
         <p className="notice">
           This link isn't taking RSVPs right now
-          {!event.rsvp_open ? " because you closed them." : " because the event is full or has started."}
+          {!event.rsvp_open ? " because you closed them." : (event.waitlist_enabled ? " because the event has started." : " because the event is full or has started.")}
         </p>
       )}
 
@@ -124,6 +147,9 @@ export default function EventDetail() {
         </button>
         {!editing && <button type="button" className="secondary" onClick={() => setEditing(true)}>Edit details</button>}
         <button type="button" className="secondary" onClick={load}>Refresh</button>
+        <button type="button" className="secondary" onClick={exportGuests} disabled={guests.length === 0}>
+          Export guest list (CSV)
+        </button>
         <button type="button" className="danger" onClick={remove}>Delete event</button>
       </div>
 
@@ -142,16 +168,24 @@ export default function EventDetail() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Name</th><th>Reply</th><th>Party</th><th>Email</th><th>Note</th></tr>
+              <tr><th>Name</th><th>Reply</th><th>Party</th><th>Email</th><th>Note</th><th aria-label="Actions" /></tr>
             </thead>
             <tbody>
               {guests.map((g) => (
                 <tr key={g.id}>
                   <td>{g.name}</td>
-                  <td><span className={`pill ${g.response}`}>{g.response}</span></td>
+                  <td>
+                    {g.status === "waitlisted"
+                      ? <span className="pill maybe">waitlist #{g.waitlist_position}</span>
+                      : <span className={`pill ${g.response}`}>{g.response}</span>}
+                    {g.promoted_at && <span className="muted small"> (from waitlist)</span>}
+                  </td>
                   <td>{g.party_size}</td>
                   <td>{g.email}</td>
                   <td>{g.note}</td>
+                  <td>
+                    <button type="button" className="link" onClick={() => removeGuest(g)}>Remove</button>
+                  </td>
                 </tr>
               ))}
             </tbody>

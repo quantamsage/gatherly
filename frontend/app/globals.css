@@ -207,3 +207,8 @@ th { color: var(--muted); font-weight: 600; }
   .stamp { animation: stamp-in 260ms ease-out; }
   @keyframes stamp-in { from { transform: rotate(-4deg) scale(1.6); opacity: 0; } }
 }
+
+/* Checkbox row with a hint, e.g. "Keep a waitlist" in the event form */
+label.check { display: flex; gap: 0.6rem; align-items: flex-start; font-weight: 500; }
+label.check input { width: auto; margin-top: 0.3rem; }
+label.check .hint { display: block; font-weight: 400; }

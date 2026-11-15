@@ -2,17 +2,16 @@
 
 import { useParams } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
-import { api, errorMessage } from "@/lib/api";
+import Link from "next/link";
+import { api, calendarUrl, errorMessage } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import type { Answer, PublicEvent } from "@/lib/types";
+import type { Answer, PublicEvent, RsvpConfirmation } from "@/lib/types";
 
 const ANSWERS: { value: Answer; label: string }[] = [
   { value: "yes", label: "Going" },
   { value: "maybe", label: "Maybe" },
   { value: "no", label: "Can't go" },
 ];
-
-type Confirmation = { name: string; response: Answer; party_size: number };
 
 export default function PublicRsvpPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -25,7 +24,7 @@ export default function PublicRsvpPage() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<Confirmation | null>(null);
+  const [done, setDone] = useState<RsvpConfirmation | null>(null);
 
   useEffect(() => {
     api<PublicEvent>(`/public/events/${encodeURIComponent(slug)}`)
@@ -38,7 +37,7 @@ export default function PublicRsvpPage() {
     setBusy(true);
     setError("");
     try {
-      const result = await api<Confirmation>(`/public/events/${encodeURIComponent(slug)}/rsvps`, {
+      const result = await api<RsvpConfirmation>(`/public/events/${encodeURIComponent(slug)}/rsvps`, {
         method: "POST",
         body: { name, email, response: answer, party_size: partySize, note },
       });
@@ -66,9 +65,12 @@ export default function PublicRsvpPage() {
             <span><strong>When</strong> {formatDateTime(event.starts_at)}</span>
             {event.location && <span><strong>Where</strong> {event.location}</span>}
             {event.spots_left !== null && event.accepting_rsvps && (
-              <span><strong>Spots left</strong> {event.spots_left}</span>
+              <span><strong>Spots left</strong> {event.spots_left > 0 ? event.spots_left : "Full, waitlist open"}</span>
             )}
           </div>
+          <p style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+            <a className="small" href={calendarUrl(slug)}>Add to calendar (.ics)</a>
+          </p>
           {event.description && <p style={{ marginTop: "1rem", whiteSpace: "pre-line" }}>{event.description}</p>}
         </div>
 
@@ -77,13 +79,32 @@ export default function PublicRsvpPage() {
         <div className="ticket-bottom">
           {done ? (
             <div role="status">
-              <span className={`stamp ${done.response}`}>
-                {ANSWERS.find((a) => a.value === done.response)?.label}
-              </span>
-              <p>
-                Thanks, {done.name}. Your reply is saved
-                {done.response === "yes" && done.party_size > 1 ? ` for ${done.party_size} people` : ""}.
-                The host can see it now.
+              {done.status === "waitlisted" ? (
+                <>
+                  <span className="stamp maybe">Waitlist #{done.waitlist_position}</span>
+                  <p>
+                    Thanks, {done.name}. The event is full right now, so you&apos;re number{" "}
+                    {done.waitlist_position} on the waitlist
+                    {done.party_size > 1 ? ` for ${done.party_size} people` : ""}. If a spot opens up you
+                    move up automatically, in order.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <span className={`stamp ${done.response}`}>
+                    {ANSWERS.find((a) => a.value === done.response)?.label}
+                  </span>
+                  <p>
+                    Thanks, {done.name}. Your reply is saved
+                    {done.response === "yes" && done.party_size > 1 ? ` for ${done.party_size} people` : ""}.
+                    The host can see it now.
+                  </p>
+                </>
+              )}
+              <p className="notice small">
+                <strong>Keep this private link</strong> to check your place, bring fewer people or cancel:{" "}
+                <Link href={`/rsvp/${done.manage_token}`}>manage my reply</Link>. Anyone with the link can change
+                your reply, so don&apos;t share it.
               </p>
             </div>
           ) : !event.accepting_rsvps ? (
@@ -93,6 +114,12 @@ export default function PublicRsvpPage() {
           ) : (
             <form onSubmit={submit}>
               {error && <p className="error" role="alert">{error}</p>}
+              {event.spots_left === 0 && event.waitlist_enabled && (
+                <p className="notice">
+                  This event is full. If you say you&apos;re going, you&apos;ll join the waitlist and get a spot
+                  automatically when one opens up.
+                </p>
+              )}
               <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
                 <legend style={{ fontWeight: 600 }}>Your reply</legend>
                 <div className="answers">

@@ -20,6 +20,7 @@ export default function EventForm({ initial, submitLabel, onSubmit, onCancel }: 
   const [location, setLocation] = useState(initial?.location ?? "");
   const [startsAt, setStartsAt] = useState(initial ? isoToLocalInput(initial.starts_at) : "");
   const [capacity, setCapacity] = useState(initial?.capacity?.toString() ?? "");
+  const [waitlist, setWaitlist] = useState(initial?.waitlist_enabled ?? false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -34,6 +35,7 @@ export default function EventForm({ initial, submitLabel, onSubmit, onCancel }: 
         location,
         starts_at: localInputToIso(startsAt),
         capacity: capacity === "" ? null : Number(capacity),
+        waitlist_enabled: waitlist,
       });
     } catch (err) {
       setError(errorMessage(err));
@@ -61,6 +63,15 @@ export default function EventForm({ initial, submitLabel, onSubmit, onCancel }: 
             onChange={(e) => setCapacity(e.target.value)} />
         </label>
       </div>
+      {capacity !== "" && (
+        <label className="check">
+          <input type="checkbox" checked={waitlist} onChange={(e) => setWaitlist(e.target.checked)} />
+          <span>
+            Keep a waitlist when it&apos;s full
+            <span className="hint"> Guests who say yes after that are added in order and move up automatically when someone cancels or you add spots.</span>
+          </span>
+        </label>
+      )}
       <label>
         Where <span className="hint">(optional)</span>
         <input maxLength={200} value={location} onChange={(e) => setLocation(e.target.value)} />

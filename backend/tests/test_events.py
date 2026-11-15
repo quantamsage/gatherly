@@ -9,7 +9,8 @@ def test_create_and_get_event(client):
     assert ev["title"] == "Launch party"  # trimmed
     assert len(ev["slug"]) == 16
     assert ev["accepting_rsvps"] is True
-    assert ev["counts"] == {"yes": 0, "no": 0, "maybe": 0, "attending": 0}
+    assert ev["counts"] == {"yes": 0, "no": 0, "maybe": 0, "waitlisted": 0, "attending": 0}
+    assert ev["waitlist_enabled"] is False
     assert client.get(f"/events/{ev['id']}", headers=h).json() == ev
 
 

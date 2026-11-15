@@ -12,7 +12,7 @@ export default function HostTopbar() {
   }
   return (
     <nav className="topbar">
-      <Link href="/dashboard" className="brand">Event RSVP</Link>
+      <Link href="/dashboard" className="brand">Gatherly</Link>
       <button type="button" className="link" onClick={logOut}>Log out</button>
     </nav>
   );

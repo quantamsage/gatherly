@@ -12,12 +12,15 @@ from app import repo
 from app.db import get_conn
 from app.deps import current_host_id
 from app.errors import APIError
+from app.exports import guest_list_csv
+from app.promotion import promote_waitlist
 from app.rsvp_logic import capacity_too_low, is_accepting_rsvps
 from app.schemas import Counts, EventCreate, EventUpdate, HostEvent, Rsvp
 
 router = APIRouter(prefix="/events", tags=["events"])
 
 EventId = Annotated[int, Path(ge=1, le=2**63 - 1)]
+RsvpId = Annotated[int, Path(ge=1, le=2**63 - 1)]
 
 
 def not_found() -> APIError:
@@ -28,12 +31,13 @@ def to_host_event(row: dict) -> HostEvent:
     """Build the API shape from a database row (event + counts)."""
     return HostEvent(
         **{k: row[k] for k in ("id", "slug", "title", "description", "location",
-                               "starts_at", "capacity", "rsvp_open", "created_at")},
+                               "starts_at", "capacity", "rsvp_open", "waitlist_enabled", "created_at")},
         accepting_rsvps=is_accepting_rsvps(
             row["rsvp_open"], row["starts_at"], row["capacity"], row["attending"],
-            datetime.now(timezone.utc),
+            datetime.now(timezone.utc), row["waitlist_enabled"],
         ),
-        counts=Counts(yes=row["yes"], no=row["no"], maybe=row["maybe"], attending=row["attending"]),
+        counts=Counts(yes=row["yes"], no=row["no"], maybe=row["maybe"],
+                      waitlisted=row["waitlisted"], attending=row["attending"]),
     )
 
 
@@ -75,6 +79,9 @@ def update_event(event_id: EventId, body: EventUpdate, host_id: int = Depends(cu
                 "Capacity can't be lower than the number of people already coming.",
             )
         repo.update_event(conn, host_id, event_id, changes)
+        if "capacity" in changes:
+            # More room (or no limit at all): let people in from the waitlist.
+            promote_waitlist(conn, event_id, changes["capacity"])
         return to_host_event(repo.get_host_event(conn, host_id, event_id))
 
 
@@ -92,3 +99,33 @@ def list_rsvps(event_id: EventId, host_id: int = Depends(current_host_id)):
         if repo.get_host_event(conn, host_id, event_id) is None:  # ownership check first
             raise not_found()
         return repo.list_rsvps(conn, event_id)
+
+
+@router.delete("/{event_id}/rsvps/{rsvp_id}", status_code=204)
+def remove_rsvp(event_id: EventId, rsvp_id: RsvpId, host_id: int = Depends(current_host_id)):
+    """Remove a guest's reply. Their spot goes to the waitlist straight away."""
+    with get_conn() as conn:
+        event = repo.lock_host_event(conn, host_id, event_id)
+        if event is None or not repo.delete_rsvp(conn, event_id, rsvp_id):
+            raise APIError(404, "NOT_FOUND", "RSVP not found.")
+        promote_waitlist(conn, event_id, event["capacity"])
+    return Response(status_code=204)
+
+
+@router.get(
+    "/{event_id}/rsvps/export",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {}}}},
+)
+def export_rsvps(event_id: EventId, host_id: int = Depends(current_host_id)):
+    """The guest list as CSV, e.g. for a door list or name badges."""
+    with get_conn() as conn:
+        event = repo.get_host_event(conn, host_id, event_id)
+        if event is None:
+            raise not_found()
+        rows = repo.list_rsvps(conn, event_id)
+    return Response(
+        content=guest_list_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="guests-{event["slug"]}.csv"'},
+    )

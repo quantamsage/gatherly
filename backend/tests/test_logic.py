@@ -68,3 +68,37 @@ def test_capacity_too_low():
     assert capacity_too_low(3, 4)
     assert not capacity_too_low(4, 4)
     assert not capacity_too_low(None, 100)  # removing the limit is always fine
+
+
+# ---------- waitlist ----------
+
+from app.rsvp_logic import rsvp_status, to_promote  # noqa: E402
+
+
+def test_full_event_with_waitlist_accepts_yes_and_waitlists_it():
+    args = dict(rsvp_open=True, starts_at=LATER, capacity=4, attending=4, response="yes",
+                party_size=2, now=NOW)
+    assert rsvp_rejection(**args, waitlist_enabled=True) is None
+    assert rsvp_rejection(**args)[0] == "EVENT_FULL"
+    assert rsvp_status(4, 4, "yes", 2) == "waitlisted"
+    assert rsvp_status(4, 2, "yes", 2) == "confirmed"
+    assert rsvp_status(4, 4, "maybe", 3) == "confirmed"
+
+
+def test_party_bigger_than_event_is_refused_even_with_waitlist():
+    code, message = rsvp_rejection(rsvp_open=True, starts_at=LATER, capacity=4, attending=0,
+                                   response="yes", party_size=5, now=NOW, waitlist_enabled=True)
+    assert code == "EVENT_FULL" and "only has room for 4" in message
+
+
+def test_to_promote_goes_in_order_and_skips_parties_that_dont_fit():
+    waitlist = [(1, 3), (2, 1), (3, 2), (4, 1)]
+    assert to_promote(10, 8, waitlist) == [2, 4]       # 2 spots: party of 3 skipped, 1 + 1 fit
+    assert to_promote(10, 7, waitlist) == [1]          # 3 spots: the first party takes them all
+    assert to_promote(None, 50, waitlist) == [1, 2, 3, 4]  # no limit: everyone in
+    assert to_promote(10, 10, waitlist) == []
+
+
+def test_full_event_with_waitlist_still_accepting():
+    assert is_accepting_rsvps(True, LATER, 4, 4, NOW, waitlist_enabled=True) is True
+    assert is_accepting_rsvps(True, LATER, 4, 4, NOW) is False

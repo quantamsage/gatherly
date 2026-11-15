@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
-  title: Event RSVP API
-  version: 1.0.0
+  title: Gatherly API
+  version: 1.1.0
   description: |
     Hosts sign up, create events and see who is coming.
-    Guests RSVP through a public link without an account.
+    Guests RSVP through a public link without an account, and get a private
+    link to change or cancel their reply. Full events can keep a waitlist.
 
     Every error uses the same shape: {"error": {"code": "...", "message": "..."}}.
     Host routes need a JWT access token in the header: Authorization: Bearer <token>.
@@ -179,6 +180,41 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /events/{event_id}/rsvps/export:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [events]
+      summary: Download the guest list as CSV
+      description: |
+        Columns: name, email, response, status, party_size, waitlist_position, note, replied_at.
+        Ordered coming, waitlist (in order), maybe, no. Cells starting with =, +, - or @ are
+        prefixed with ' so spreadsheets don't run them as formulas.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv: { schema: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /events/{event_id}/rsvps/{rsvp_id}:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+      - name: rsvp_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    delete:
+      tags: [events]
+      summary: Remove a guest's reply. Freed spots go to the waitlist straight away.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /public/events/{slug}:
     parameters:
       - $ref: "#/components/parameters/Slug"
@@ -201,7 +237,10 @@ paths:
       summary: RSVP to an event as a guest
       description: |
         One RSVP per email per event. Fails with 409 when RSVPs are closed,
-        the event has started, the event is full, or this email already replied.
+        the event has started, the event is full (and has no waitlist), the party is
+        bigger than the whole event, or this email already replied.
+        When the event is full and has a waitlist, a "yes" is saved with status "waitlisted".
+        The response includes a one-time manage_token for /public/rsvps/{token}.
       requestBody:
         required: true
         content:
@@ -215,6 +254,67 @@ paths:
               schema: { $ref: "#/components/schemas/RsvpConfirmation" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /public/events/{slug}/calendar.ics:
+    parameters:
+      - $ref: "#/components/parameters/Slug"
+    get:
+      tags: [public]
+      summary: Add-to-calendar file (iCalendar) for the event
+      description: Events only have a start time, so the calendar entry lasts 2 hours.
+      responses:
+        "200":
+          description: .ics file
+          content:
+            text/calendar: { schema: { type: string } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /public/rsvps/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: The manage_token from the RSVP confirmation. Only its SHA-256 is stored.
+        schema: { type: string, pattern: "^[A-Za-z0-9_-]{32}$" }
+    get:
+      tags: [public]
+      summary: A guest's own reply (and waitlist position)
+      responses:
+        "200":
+          description: The guest's RSVP
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuestRsvp" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [public]
+      summary: Bring fewer people. Freed spots go to the waitlist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [party_size]
+              properties:
+                party_size: { type: integer, minimum: 1, maximum: 10 }
+      responses:
+        "200":
+          description: Updated RSVP
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuestRsvp" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+    delete:
+      tags: [public]
+      summary: Cancel your reply. If you had a spot, the waitlist moves up.
+      responses:
+        "204": { description: Cancelled }
+        "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/ValidationError" }
 
 components:
@@ -257,6 +357,8 @@ components:
                 - EVENT_FULL
                 - ALREADY_RESPONDED
                 - CAPACITY_TOO_LOW
+                - NOT_ATTENDING
+                - PARTY_SIZE_INCREASE
                 - HTTP_ERROR
                 - INTERNAL_ERROR
             message: { type: string }
@@ -299,6 +401,10 @@ components:
           minimum: 1
           maximum: 10000
           description: Max people attending (party sizes added up). Null means no limit.
+        waitlist_enabled:
+          type: boolean
+          default: false
+          description: When full, extra "yes" replies join a waitlist instead of being refused.
 
     EventUpdate:
       type: object
@@ -310,19 +416,21 @@ components:
         starts_at: { type: string, format: date-time }
         capacity: { type: [integer, "null"], minimum: 1, maximum: 10000 }
         rsvp_open: { type: boolean }
+        waitlist_enabled: { type: boolean }
 
     Counts:
       type: object
-      required: [yes, no, maybe, attending]
+      required: [yes, no, maybe, waitlisted, attending]
       properties:
-        yes: { type: integer, description: RSVPs answering yes }
+        yes: { type: integer, description: Confirmed yes RSVPs }
+        waitlisted: { type: integer, description: Yes RSVPs waiting for a spot }
         no: { type: integer }
         maybe: { type: integer }
         attending: { type: integer, description: People coming (party sizes of yes RSVPs added up) }
 
     HostEvent:
       type: object
-      required: [id, slug, title, description, location, starts_at, capacity, rsvp_open, accepting_rsvps, counts, created_at]
+      required: [id, slug, title, description, location, starts_at, capacity, rsvp_open, waitlist_enabled, accepting_rsvps, counts, created_at]
       properties:
         id: { type: integer }
         slug: { type: string, description: Random, unguessable part of the public link }
@@ -332,13 +440,14 @@ components:
         starts_at: { type: string, format: date-time }
         capacity: { type: [integer, "null"] }
         rsvp_open: { type: boolean, description: Host's switch to open or close RSVPs }
-        accepting_rsvps: { type: boolean, description: Open, not started yet, and not full }
+        waitlist_enabled: { type: boolean }
+        accepting_rsvps: { type: boolean, description: Open, not started yet, and not full (or full with a waitlist) }
         counts: { $ref: "#/components/schemas/Counts" }
         created_at: { type: string, format: date-time }
 
     PublicEvent:
       type: object
-      required: [slug, title, description, location, starts_at, accepting_rsvps, spots_left]
+      required: [slug, title, description, location, starts_at, accepting_rsvps, spots_left, waitlist_enabled]
       properties:
         slug: { type: string }
         title: { type: string }
@@ -347,6 +456,7 @@ components:
         starts_at: { type: string, format: date-time }
         accepting_rsvps: { type: boolean }
         spots_left: { type: [integer, "null"], description: Null when there is no limit }
+        waitlist_enabled: { type: boolean, description: When full, a "yes" joins the waitlist }
 
     RsvpCreate:
       type: object
@@ -363,17 +473,44 @@ components:
           description: People in the group including the guest
         note: { type: string, maxLength: 500, default: "" }
 
+    RsvpStatus:
+      type: string
+      enum: [confirmed, waitlisted]
+
     RsvpConfirmation:
       type: object
-      required: [name, response, party_size]
+      required: [name, response, party_size, status, waitlist_position, manage_token]
       properties:
         name: { type: string }
         response: { type: string, enum: ["yes", "no", "maybe"] }
         party_size: { type: integer }
+        status: { $ref: "#/components/schemas/RsvpStatus" }
+        waitlist_position: { type: [integer, "null"], description: 1 = next in line }
+        manage_token:
+          type: string
+          description: Secret for the guest's private manage link. Shown only once.
+
+    GuestRsvp:
+      type: object
+      required: [name, response, party_size, status, waitlist_position, event]
+      properties:
+        name: { type: string }
+        response: { type: string, enum: ["yes", "no", "maybe"] }
+        party_size: { type: integer }
+        status: { $ref: "#/components/schemas/RsvpStatus" }
+        waitlist_position: { type: [integer, "null"] }
+        event:
+          type: object
+          required: [slug, title, location, starts_at]
+          properties:
+            slug: { type: string }
+            title: { type: string }
+            location: { type: string }
+            starts_at: { type: string, format: date-time }
 
     Rsvp:
       type: object
-      required: [id, name, email, response, party_size, note, created_at]
+      required: [id, name, email, response, party_size, note, status, waitlist_position, promoted_at, created_at]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -381,6 +518,9 @@ components:
         response: { type: string, enum: ["yes", "no", "maybe"] }
         party_size: { type: integer }
         note: { type: string }
+        status: { $ref: "#/components/schemas/RsvpStatus" }
+        waitlist_position: { type: [integer, "null"], description: 1 = next in line; null unless waitlisted }
+        promoted_at: { type: [string, "null"], format: date-time, description: When they moved up from the waitlist }
         created_at: { type: string, format: date-time }
 
   responses:

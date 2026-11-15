@@ -66,6 +66,7 @@ class EventCreate(StrictModel):
     location: Location = ""
     starts_at: AwareDatetime  # must include a timezone, e.g. 2026-11-01T18:00:00Z
     capacity: Capacity | None = None
+    waitlist_enabled: bool = False
 
     @field_validator("starts_at")
     @classmethod
@@ -80,6 +81,7 @@ class EventUpdate(StrictModel):
     starts_at: AwareDatetime | None = None
     capacity: Capacity | None = None
     rsvp_open: bool | None = None
+    waitlist_enabled: bool | None = None
 
     @field_validator("starts_at")
     @classmethod
@@ -102,10 +104,11 @@ class EventUpdate(StrictModel):
 
 
 class Counts(BaseModel):
-    yes: int
+    yes: int        # confirmed yes replies
     no: int
     maybe: int
-    attending: int
+    waitlisted: int  # yes replies waiting for a spot
+    attending: int  # people (party sizes) confirmed
 
 
 class HostEvent(BaseModel):
@@ -117,9 +120,13 @@ class HostEvent(BaseModel):
     starts_at: datetime
     capacity: int | None
     rsvp_open: bool
+    waitlist_enabled: bool
     accepting_rsvps: bool
     counts: Counts
     created_at: datetime
+
+
+RsvpStatus = Literal["confirmed", "waitlisted"]
 
 
 class Rsvp(BaseModel):
@@ -129,6 +136,9 @@ class Rsvp(BaseModel):
     response: RsvpResponse
     party_size: int
     note: str
+    status: RsvpStatus
+    waitlist_position: int | None  # 1 = next in line; null unless waitlisted
+    promoted_at: datetime | None    # when they moved up from the waitlist
     created_at: datetime
 
 
@@ -142,6 +152,7 @@ class PublicEvent(BaseModel):
     starts_at: datetime
     accepting_rsvps: bool
     spots_left: int | None
+    waitlist_enabled: bool  # when full, "yes" replies join a waitlist
 
 
 class RsvpCreate(StrictModel):
@@ -161,3 +172,31 @@ class RsvpConfirmation(BaseModel):
     name: str
     response: RsvpResponse
     party_size: int
+    status: RsvpStatus
+    waitlist_position: int | None
+    # Private link token for changing or cancelling this reply. Shown once, never stored.
+    manage_token: str
+
+
+class GuestRsvp(BaseModel):
+    """What a guest sees on their private "manage my RSVP" page."""
+    name: str
+    response: RsvpResponse
+    party_size: int
+    status: RsvpStatus
+    waitlist_position: int | None
+    event: "GuestEventSummary"
+
+
+class GuestEventSummary(BaseModel):
+    slug: str
+    title: str
+    location: str
+    starts_at: datetime
+
+
+class GuestRsvpUpdate(StrictModel):
+    party_size: Annotated[int, Field(ge=1, le=10)]
+
+
+GuestRsvp.model_rebuild()

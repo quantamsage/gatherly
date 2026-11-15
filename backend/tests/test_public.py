@@ -13,7 +13,7 @@ def test_public_view_has_no_guest_details(client):
     body = res.json()
     assert res.status_code == 200
     assert set(body) == {"slug", "title", "description", "location", "starts_at",
-                         "accepting_rsvps", "spots_left"}
+                         "accepting_rsvps", "spots_left", "waitlist_enabled"}
     assert body["spots_left"] == 7
     assert "secret" not in res.text.lower() and "Secret Sam" not in res.text
 
@@ -31,7 +31,7 @@ def test_rsvp_counts_show_on_host_dashboard(client):
     rsvp(client, ev["slug"], email="b@example.com", response="maybe")
     rsvp(client, ev["slug"], email="c@example.com", response="no", party_size=5)
     counts = client.get(f"/events/{ev['id']}", headers=h).json()["counts"]
-    assert counts == {"yes": 1, "no": 1, "maybe": 1, "attending": 2}
+    assert counts == {"yes": 1, "no": 1, "maybe": 1, "waitlisted": 0, "attending": 2}
     guests = client.get(f"/events/{ev['id']}/rsvps", headers=h).json()
     assert [g["email"] for g in guests] == ["c@example.com", "b@example.com", "a@example.com"]
     assert guests[0]["party_size"] == 1  # a "no" never brings anyone
